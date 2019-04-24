@@ -47,11 +47,12 @@ class Dense_layer:
 
 
 class Predictor:
-    def __init__(self, data_dimensions, target_dimensions):
+    def __init__(self, data_dimensions, hidden_dimensions, target_dimensions):
         self.graph = tf.Graph()
         self.session = tf.Session(graph=self.graph)
 
         self.dim_x = data_dimensions
+        self.dim_h = hidden_dimensions
         self.dim_y = target_dimensions
 
         with self.graph.as_default():
@@ -59,8 +60,9 @@ class Predictor:
                 self.X = tf.placeholder(dtype = tf.float32, shape = [None, self.dim_x])
                 self.y = tf.placeholder(dtype = tf.int64, shape = [None, self.dim_y])
 
-            self.h1 = Dense_layer(self.X, self.dim_x, 10, 'layer1', self.graph)
-            self.last = Dense_layer(self.h1.act, 10, self.dim_y, 'layer2', self.graph, activation=tf.nn.softmax)
+            self.h1 = Dense_layer(self.X, self.dim_x, self.dim_h, 'layer1', self.graph)
+            self.last = Dense_layer(self.h1.act, self.dim_h, self.dim_y, 'layer2', self.graph, activation=tf.nn.softmax)
+            self.set_metrics()
             self.set_trainer(0.1)
 
             self.session.run(tf.global_variables_initializer())
@@ -68,20 +70,21 @@ class Predictor:
 
     def set_trainer(self, learning_rate):
         with self.graph.as_default():
+            with tf.name_scope('train'):
+                self.train_step = tf.train.AdamOptimizer(learning_rate).minimize(self.cross_entropy)
+
+    def set_metrics(self):
+        with self.graph.as_default():
             with tf.name_scope('cross_entropy'):
                 with tf.name_scope('total'):
                     self.cross_entropy = tf.losses.softmax_cross_entropy(self.y, self.last.act)
                 tf.summary.scalar('cross_entropy', self.cross_entropy)
-
-            with tf.name_scope('train'):
-                self.train_step = tf.train.AdamOptimizer(learning_rate).minimize(self.cross_entropy)
-
-            with tf.name_scope('accuracy'):
+            with tf.name_scope('metrics'):
                 with tf.name_scope('correct_prediction'):
-                    self.correct_prediction = tf.equal(tf.argmax(self.last.act, 1), self.y)
+                    self.correct_prediction = tf.equal(tf.argmax(self.last.act, 1), tf.argmax(self.y, 1))
                 with tf.name_scope('accuracy'):
                     self.accuracy = tf.reduce_mean(tf.cast(self.correct_prediction, tf.float32))
-                tf.summary.scalar('accuracy', self.accuracy)
+                    tf.summary.scalar('accuracy', self.accuracy)
 
     def combine_summaries(self):
         with self.graph.as_default():
@@ -89,22 +92,18 @@ class Predictor:
             self.train_writer = tf.summary.FileWriter('./Tensorboard' + '/train', self.graph)
             self.test_writer = tf.summary.FileWriter('./Tensorboard' + '/test')
 
-    def feed_dict(self, X, y, len):
+    def feed_dict(self, X, y=None, len=1, train=False):
         with self.graph.as_default():
-            return {self.X: np.array(X).reshape(len, self.dim_x), self.y: np.array(y).reshape(len, self.dim_y)}
+            if train:
+                return {self.X: np.array(X).reshape(len, self.dim_x), self.y: np.array(y).reshape(len, self.dim_y)}
+            else:
+                return {self.X: np.array(X).reshape(len, self.dim_x)}
 
     def train(self, X, y):
         with self.graph.as_default():
-            self.session.run(self.train_step, feed_dict=self.feed_dict(X, y, X.shape[1]))
+            self.session.run(self.train_step, feed_dict=self.feed_dict(X, y, X.shape[0], True))
 
     def predict(self, X):
-        return
-
-# %% testing space
-ex = Predictor(6, 3)
-X = pd.DataFrame([1,2,3,4,5,6], [7,8,9,10,11,12])
-y = pd.DataFrame([0,0,1], [1,0,0])
-ex.train(X, y)
-
-# %%
-ex.h1.weights
+        with self.graph.as_default():
+            result = self.session.run(self.last.act, feed_dict=self.feed_dict(X, len=X.shape[0]))
+            return result
